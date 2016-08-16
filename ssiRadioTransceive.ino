@@ -55,23 +55,28 @@
     cli(); \
     CODE; \
     SREG = sregCopy;
-    
 #include <QueueArray.h>
+#define DEBUG_ARRAYS true
 //#include <SoftwareSerial.h>
 //SoftwareSerial radioSerial(A7,A6); //use these pins for the radio
 
 //debug mode //
 volatile bool debug = true;
-volatile bool debugTx = true;
-volatile bool debugRx = false;
+volatile bool debugTx = false;
+volatile bool debugRx = true;
 void debugReceive();
 void debugTransmit(String testData);
-QueueArray<int> samplesOut;
-QueueArray<int> bitsOut;
-QueueArray<int> samplesIn;
-QueueArray<int> demodSamples;
-QueueArray<int> bitsIn;
-String bytesIn;
+//TODO: Implement with volatile arrays
+#if DEBUG_ARRAYS == true
+static const int SAMPLES_IN_CAP = 1024;
+volatile uint8_t samplesIn[SAMPLES_IN_CAP];
+volatile int sizeSamplesIn = 0;
+volatile uint8_t demodSamples[SAMPLES_IN_CAP];
+volatile int sizeDemodSamples = 0;
+static const int BITS_IN_CAP = 256;
+volatile uint8_t bitsIn[BITS_IN_CAP];
+volatile uint8_t sizeBitsIn = 0;
+#endif
 static const int DEBUG_RECEIVE_DURATION = 2500; //ms
 
 // set parameters for DRA818V
@@ -82,6 +87,7 @@ String tx_ctcss = "0000";               // ctcss frequency ( 0000 - 0038 ); 0000
 String rx_ctcss = "0000";               // ctcss frequency ( 0000 - 0038 ); 0000 = "no CTCSS"  
 static const int squ = 0;                                       // squelch level  ( 0 - 8 ); 0 = "open"  
 static const int PTT = 2;
+static const int LED_PIN = 3;
 char incomingByte;
 String messageTx = "Hello World!";
 static const String DESTINATION_ADDRESS = "KM4SEE1";
@@ -248,12 +254,13 @@ void setup()
   radioSerial.begin(9600);                      // open serial at 9600 bps
   Serial.begin(9600);
   pinMode(PTT,OUTPUT);
-  pinMode(micPin,OUTPUT);
+  pinMode(micPin,OUTPUT);  
+  pinMode(3,OUTPUT);
   analogWriteResolution(8);
   setupRadio();
   interruptTimer.begin(radioISR,(float) 1E6/SAMPLE_RATE); //microseconds
-    pinMode(3,OUTPUT);
 }
+
 void setupRadio() {
     digitalWrite(PTT,LOW);
     delay(200);
@@ -290,8 +297,13 @@ void loop() {
 //  Serial.println("Done");
 //  delay(1000);
 //  digitalWrite(PTT,HIGH);
-    transmitAPRSPacket("Hello World!");
-    while(txing); //wait until transmission is complete, after which it will be turned false
+      Serial.println("Start");
+      debugReceive();
+      Serial.println("End");
+//    transmitAPRSPacket("Hello World!");
+//    while(txing);//wait until transmission is complete, after which it will be turned false
+//    digitalWrite(PTT,HIGH);
+//    delay(10000);
 //  digitalWrite(3,LOW);
 //  if(debugRx) {
 //      debugReceive();
@@ -350,17 +362,15 @@ void analogWriteTone(byte mic, long freq, long durationMillis) {
 }
 
 void radioISR() {
-  digitalWrite(3,HIGH);
     if(txing) {
         radioTXISR();
+    } else {
+        radioRXISR();
     }
-//    if(!txing) {
-//        radioRXISR();
-//    }
-    digitalWrite(3,LOW);
 }
 
 void radioTXISR() {
+  if(!debugRx) digitalWrite(LED_PIN,HIGH);
       if(bitIndex == 0) {
           if(byteIndex== 0) {
               if(!txBuffer.isEmpty()) {
@@ -368,6 +378,8 @@ void radioTXISR() {
               } else {
                   txing = false;
                   digitalWrite(PTT,HIGH);
+                  analogWrite(micPin,0);
+                  digitalWrite(LED_PIN,LOW);
                   return;
               }
               byteIndex = B10000000; //reset the byte bitmask to the first bit
@@ -397,7 +409,7 @@ void radioTXISR() {
       analogOut = sineLookup(currentPhase);
       analogWrite(micPin, analogOut);
   // t1 = micros();
-
+      if(!debugRx) digitalWrite(LED_PIN,LOW);
 }
 
 uint8_t sineLookup(const int currentPhase) {
@@ -408,11 +420,16 @@ uint8_t sineLookup(const int currentPhase) {
     return analogOut;
 }
 void radioRXISR() {
+    if(!debugTx) digitalWrite(LED_PIN, HIGH);
     processSample((int16_t) analogRead(audioPin)); //processSample() references the sine wave to 0, so the reading must be cast to a signed int
+    if(!debugTx) digitalWrite(LED_PIN,LOW);
 }
 
 void processSample(int8_t sample) {
-    if(debug) samplesIn.enqueue(sample);
+    if(debug) {
+        samplesIn[sizeSamplesIn] = sample;
+        sizeSamplesIn++;
+    }
     if(lastFiveSamples.count() < 5) {
         lastFiveSamples.enqueue(sample);
         syncCounter+=SYNC_SAMPLE_INCREMENT;
@@ -421,7 +438,10 @@ void processSample(int8_t sample) {
     delayedSamples[0] = delayedSamples[1];
     delayedSamples[1] = ((int8_t)lastFiveSamples.dequeue() * sample ) >> 2;
     lowPassOut = (lowPassOut >> 1) + delayedSamples[0] + delayedSamples[1];
-    if(debug) demodSamples.enqueue( (lowPassOut > 0) ? 1 : 0 );
+    if(debug) {
+        demodSamples[sizeDemodSamples] = (lowPassOut > 0) ? 1 : 0 ;
+        sizeDemodSamples++;
+    }
     lastFiveSamples.enqueue(sample);
     sampledBitStream <<= 1;
     sampledBitStream |= (lowPassOut > 0) ? 1 : 0;
@@ -568,20 +588,23 @@ void parseNRZToDataBits(byte b) {
             dataBits |= 1;
             consecutiveOnes++;
             if(debug) {
-               bitsIn.enqueue(1);
+               if(sizeBitsIn < BITS_IN_CAP) {
+                   bitsIn[sizeBitsIn] = 1;
+                   sizeBitsIn++;
+               }
             }   
         } else {
             consecutiveOnes = 0;
             if(debug) {
-                bitsIn.enqueue(0);
+                if(sizeBitsIn < BITS_IN_CAP) {
+                    bitsIn[sizeBitsIn] = 0;
+                    sizeBitsIn++;
+                }
             }
         }
         bitsRead++;
     }
     if(bitsRead == 8) {
-      if(debug) {
-          bytesIn+=(char)dataBits;
-      }
         bitsRead = 0;
         if(dataBits == HDLC_FLAG) {
             if(!rxing || debug) {
@@ -625,51 +648,69 @@ void debugTransmit(String testData) {
     while(txing); //wait until transmission is complete, after which it will be turned false
     delay(1000);
     int count8 = 0;
-    Serial.println("Bits Sent:");
-    while(!bitsOut.isEmpty()) {
-        if(count8 == 8) {
-          count8 = 0;
-          Serial.print("|");
-        }
-        Serial.print(bitsOut.dequeue());
-        count8++;
-    }
+//    Serial.println("Bits Sent:");
+//    while(!bitsOutSize==0) {
+//        if(count8 == 8) {
+//          count8 = 0;
+//          Serial.print("|");
+//        }
+//        Serial.print(bitsOut[bitsOutSize]);
+//        count8++;
+//    }
     Serial.println("done");
 }
 
-void debugReceive() {
-    int t0 = millis();
-    rxing = true;
-    while(rxing) {
-        if(millis() > t0 + DEBUG_RECEIVE_DURATION) {
-            rxing = false;
-        }
-    }
-    runAtomicCode (
+void debugReceive() {    
+    Serial.println("start");  
+//    int t0 = millis();
+//    Serial.println(t0);
+//    rxing = true;
+//    while(rxing) {
+//        if(millis() > t0 + DEBUG_RECEIVE_DURATION) {
+//            rxing = false;
+//        }
+//    }
+//    runAtomicCode (
+        int deqBits = 0;
+        int deqSamples = 0;
+        int deqDemodSamples = 0;
         Serial.println("Samples Received:");
-        while(!samplesIn.isEmpty()) {
-            Serial.print(samplesIn.dequeue()); 
+        while(deqSamples < sizeSamplesIn ) {
+            Serial.print(samplesIn[deqSamples]);
+            deqSamples++; 
         }
         Serial.println();
         int count8 = 0;
         Serial.println("Demodulated Samples:");
-        while(!demodSamples.isEmpty()) {
-            Serial.print(demodSamples.dequeue());
+        while(deqDemodSamples < sizeDemodSamples) {
+            Serial.print(demodSamples[deqDemodSamples]);
+            deqDemodSamples++;
         }
         Serial.println();
-        Serial.println("Bits Received");
-        while(!bitsIn.isEmpty()) {
-            if(count8 ==8) {
+        Serial.println("Bits Received:");
+        while(deqBits < sizeBitsIn) {
+            if(count8 == 8) {
                 count8 = 0;
                 Serial.print("|");
             }
-            Serial.print(bitsIn.dequeue());
+            Serial.print(bitsIn[deqBits],BIN);
             count8++;
+            deqBits++;
         }
         Serial.println();
-        Serial.println(bytesIn);
         Serial.println(incomingTransmission);
-        bytesIn = "";
+        Serial.println(sizeSamplesIn);
+        Serial.println(sizeDemodSamples);
+        Serial.println(sizeBitsIn);
         incomingTransmission = "";
-    )    
+        deqBits = 0;
+        deqSamples = 0;
+        deqDemodSamples = 0;
+        count8 = 0;
+        sizeSamplesIn = 0;
+        sizeDemodSamples = 0;
+        sizeBitsIn = 0;
+//    )
+    delay(1000);
+    Serial.println("done");
 }
