@@ -61,11 +61,12 @@
 //SoftwareSerial radioSerial(A7,A6); //use these pins for the radio
 
 //debug mode //
+static const bool INTERRUPTS_ON = true;
 volatile bool debug = true;
-volatile bool debugTx = false;
-volatile bool debugRx = true;
+volatile bool debugTx = true;
+volatile bool debugRx = false;
 void debugReceive();
-void debugTransmit(String testData);
+void debugTransmit();
 //TODO: Implement with volatile arrays
 #if DEBUG_ARRAYS == true
 static const int SAMPLES_IN_CAP = 1024;
@@ -89,7 +90,7 @@ static const int squ = 0;                                       // squelch level
 static const int PTT = 2;
 static const int LED_PIN = 3;
 char incomingByte;
-String messageTx = "Hello World!";
+String messageTx = "Hello Woooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooorld!";
 static const String DESTINATION_ADDRESS = "KM4SEE1";
 static const String SOURCE_ADDRESS = "KM4SEE ";
 static const String DIGIPEATER_PATH = "WIDE2-2";
@@ -98,10 +99,10 @@ void setupRadio();
 bool radioGood = false;
 bool clearToSend = false;
 static const int audioPin = A8;
-static const int micPin = A9;
+static const int micPin = A14;
 bool gotData = false;
 bool checkIntegrity(String packet);
-void transmitAPRSPacket(String data);
+void transmitAPRSPacket(String &data);
 
 /* Digital-to-Analog Converter constants and functions */
 void analogWriteTone(const byte mic, long frequency, long durationMillis);
@@ -184,7 +185,7 @@ volatile long t1 = 0;
 //Storage for the actual bytes to be transmitted and the array containing all data.
 QueueArray<char> txBuffer;
 String dataBuffer = "";
-void enqueueData(String data);
+void enqueueData();
 
 /* Functions called during interrupts */
 void radioISR();
@@ -258,7 +259,9 @@ void setup()
   pinMode(3,OUTPUT);
   analogWriteResolution(8);
   setupRadio();
-  interruptTimer.begin(radioISR,(float) 1E6/SAMPLE_RATE); //microseconds
+  if(INTERRUPTS_ON) {
+      interruptTimer.begin(radioISR,(float) 1E6/SAMPLE_RATE); //microseconds
+  }
 }
 
 void setupRadio() {
@@ -292,14 +295,14 @@ void setupRadio() {
     }
 }
 void loop() {  
-//  transmitAPRSPacket("Hello World!");
-//  while(txing);
-//  Serial.println("Done");
-//  delay(1000);
-//  digitalWrite(PTT,HIGH);
-      Serial.println("Start");
-      debugReceive();
-      Serial.println("End");
+    if(debugTx) {
+        debugTransmit();
+    } else {
+        debugReceive();
+    }
+//      Serial.println("Start");
+//      debugReceive();
+//      Serial.println("End");
 //    transmitAPRSPacket("Hello World!");
 //    while(txing);//wait until transmission is complete, after which it will be turned false
 //    digitalWrite(PTT,HIGH);
@@ -367,6 +370,9 @@ void radioISR() {
     } else {
         radioRXISR();
     }
+//    } else {
+//        radioRXISR();
+//    }
 }
 
 void radioTXISR() {
@@ -427,8 +433,10 @@ void radioRXISR() {
 
 void processSample(int8_t sample) {
     if(debug) {
-        samplesIn[sizeSamplesIn] = sample;
-        sizeSamplesIn++;
+        if(sizeSamplesIn < SAMPLES_IN_CAP) {
+          samplesIn[sizeSamplesIn] = sample;
+          sizeSamplesIn++;
+        }
     }
     if(lastFiveSamples.count() < 5) {
         lastFiveSamples.enqueue(sample);
@@ -439,8 +447,10 @@ void processSample(int8_t sample) {
     delayedSamples[1] = ((int8_t)lastFiveSamples.dequeue() * sample ) >> 2;
     lowPassOut = (lowPassOut >> 1) + delayedSamples[0] + delayedSamples[1];
     if(debug) {
-        demodSamples[sizeDemodSamples] = (lowPassOut > 0) ? 1 : 0 ;
-        sizeDemodSamples++;
+        if(sizeDemodSamples < SAMPLES_IN_CAP) {
+            demodSamples[sizeDemodSamples] = (lowPassOut > 0) ? 1 : 0 ;
+            sizeDemodSamples++;
+        }
     }
     lastFiveSamples.enqueue(sample);
     sampledBitStream <<= 1;
@@ -471,13 +481,13 @@ void processSample(int8_t sample) {
         }
     }
 }
-void transmitAPRSPacket(String data) {
+void transmitAPRSPacket(String &data) {
     if(!txing && !rxing) {
         while(!txBuffer.isEmpty()) {
             txBuffer.dequeue();
         }    
         transmissionProtocolInit();
-        enqueueData(data);
+        enqueueData();
         transmissionProtocolAppend();
         txVariablesInit();
         if(debugTx) { 
@@ -553,9 +563,9 @@ void attachFCS(const int FCSBits) {
     txBuffer.enqueue((char) FCSBits & 0xFF);
 }
 
-void enqueueData(String data) {
-    for(int i = 0; i < data.length(); i++) {
-        txBuffer.enqueue(data[i]);
+void enqueueData() {
+    for(int i = 0; i < messageTx.length(); i++) {
+        txBuffer.enqueue(messageTx[i]);
     }
     if(debugTx) {
         Serial.println("Data enqueued into transmission buffer");    
@@ -643,11 +653,13 @@ bool checkIntegrity(String packet) {
     return false;
 }
 
-void debugTransmit(String testData) {
-    transmitAPRSPacket(testData);
+void debugTransmit() {
+    transmitAPRSPacket(messageTx);
+//      analogWriteTone(micPin,2200,2000);
+//      analogWriteTone(micPin,1200,2000);
+//      analogWrite(micPin,128);
     while(txing); //wait until transmission is complete, after which it will be turned false
-    delay(1000);
-    int count8 = 0;
+//    int count8 = 0;
 //    Serial.println("Bits Sent:");
 //    while(!bitsOutSize==0) {
 //        if(count8 == 8) {
@@ -658,6 +670,7 @@ void debugTransmit(String testData) {
 //        count8++;
 //    }
     Serial.println("done");
+    delay(4000);
 }
 
 void debugReceive() {    
