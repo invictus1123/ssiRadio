@@ -56,21 +56,32 @@
     CODE; \
     SREG = sregCopy;
 #include <QueueArray.h>
-#define DEBUG_ARRAYS true
-//#include <SoftwareSerial.h>
-//SoftwareSerial radioSerial(A7,A6); //use these pins for the radio
 
-//debug mode //
-static const bool INTERRUPTS_ON = true;
+//flag for enabling data structures for debugging transmission and reception. Setting true will declare multiple large data structures.
+#define DEBUG_ARRAYS true
+
+//Instance variables used for debugging//
+// integers for counting the data sent and received
+int deqBits = 0;
+int deqSamples = 0;
+int deqDemodSamples = 0;
+int count8 = 0;
+
+static const bool INTERRUPTS_ON = true; //flag to turn off interrupts for debugging other parts of the code
+
+//flags for turning on debug mode for either transmission or reception
 volatile bool debug = true;
 volatile bool debugTx = true;
 volatile bool debugRx = false;
 void debugReceive();
 void debugTransmit();
-//TODO: Implement with volatile arrays
+
+//Data structures for storing received data and sent data, which are only
 #if DEBUG_ARRAYS == true
 static const int SAMPLES_IN_CAP = 1024;
-volatile uint8_t samplesIn[SAMPLES_IN_CAP];
+volatile int sizeSamplesOut = 0;
+volatile uint16_t samplesOut[SAMPLES_IN_CAP];
+volatile uint16_t samplesIn[SAMPLES_IN_CAP];
 volatile int sizeSamplesIn = 0;
 volatile uint8_t demodSamples[SAMPLES_IN_CAP];
 volatile int sizeDemodSamples = 0;
@@ -78,9 +89,8 @@ static const int BITS_IN_CAP = 256;
 volatile uint8_t bitsIn[BITS_IN_CAP];
 volatile uint8_t sizeBitsIn = 0;
 #endif
-static const int DEBUG_RECEIVE_DURATION = 2500; //ms
 
-// set parameters for DRA818V
+// DRA818V pin declaration and settings
 static const int bw = 1;                                        // bandwith in KHz ( 0= 12.5KHz or 1= 25KHz )
 static const float ftx = 144.3900;                    // tx frequency in MHz (134.0000 - 174.0000)
 static const float frx = 144.3900;                    // rx frequency in MHz (134.0000 - 174.0000) 
@@ -89,30 +99,37 @@ String rx_ctcss = "0000";               // ctcss frequency ( 0000 - 0038 ); 0000
 static const int squ = 0;                                       // squelch level  ( 0 - 8 ); 0 = "open"  
 static const int PTT = 2;
 static const int LED_PIN = 3;
-char incomingByte;
-String messageTx = "Hello Woooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooorld!";
-static const String DESTINATION_ADDRESS = "KM4SEE1";
-static const String SOURCE_ADDRESS = "KM4SEE ";
-static const String DIGIPEATER_PATH = "WIDE2-2";
-void configSettings();
-void setupRadio();
+static const int audioPin = A8;         //the pin outputting received audio/signals
+static const int micPin = A14;          //the pin doing the modulation
+
+//APRS parameters
+String messageTx = "SSI-43 Test: Hello World!";
+static const String DESTINATION_ADDRESS = "AG6WH";
+static const String SOURCE_ADDRESS = "KM4SEE";
+static const String DIGIPEATER_PATH = "WIDE2-1";
+
+char incomingByte;                      //storage for serial communication bytes
+
+//flags relating to system status
 bool radioGood = false;
 bool clearToSend = false;
-static const int audioPin = A8;
-static const int micPin = A14;
 bool gotData = false;
-bool checkIntegrity(String packet);
-void transmitAPRSPacket(String &data);
+bool checkIntegrity(String packet);     //for verifying the format of a received packet. [stub]
 
-/* Digital-to-Analog Converter constants and functions */
+/* Radio Initialization */
+void setupRadio();                      //Initializes radio parameters and starts talking to the module
+void configSettings();                  //Sets radio parameters
+
+/* Digital-to-Analog Conversion constants and functions */
 void analogWriteTone(const byte mic, long frequency, long durationMillis);
-uint8_t sineLookup(const int currentPhase);
-static const int SAMPLE_RATE = 9600;
-static const int BIT_RATE = 1200;
-static const int SAMPLES_PER_BIT = SAMPLE_RATE/BIT_RATE; //8
+uint16_t sineLookup(const int currentPhase);
+
+static const uint16_t BIT_RATE = 12500;
+static const uint16_t SAMPLE_RATE = BIT_RATE*8;
+static const int SAMPLES_PER_BIT = 8; //SAMPLE_RATE/BIT_RATE
 static const int SINE_WAVE_RESOLUTION = 512;
 
-/* Analog-to-Digital Converter constants and functions */
+/* Analog-to-Digital Conversion constants and functions */
 void parseNRZToDataBits(byte b);
 
 //demodulation data structures and variables
@@ -131,10 +148,10 @@ byte consecutiveOnes = 0;
 String incomingTransmission;
 
 //demodulation constants and instance variable dealing with phase synchronization.
-static const int RECORD_BIT_THRESHOLD = 64;
-static const int SYNC_ADJUST_THRESHOLD = 32;
-static const int SYNC_SAMPLE_INCREMENT = 8;
-static const int SYNC_ADJUST = 1;
+static const int RECORD_BIT_THRESHOLD = SINE_WAVE_RESOLUTION/8;
+static const int SYNC_ADJUST_THRESHOLD = SINE_WAVE_RESOLUTION/16;
+static const int SYNC_SAMPLE_INCREMENT = SINE_WAVE_RESOLUTION/64;
+static const int SYNC_ADJUST = SYNC_SAMPLE_INCREMENT/8;
 int syncCounter = 0;
 
 //Bell 202 standardized frequencies for 1(mark) and 0(space).
@@ -142,8 +159,8 @@ static int MARK_FREQ = 1200; //Hz
 static int SPACE_FREQ = 2200; //Hz
 
 //The distance in the sine table array between samples of the sine wave; how far we step forward in the sine wave for each sample sent
-static int MARK_INCREMENT = SINE_WAVE_RESOLUTION * MARK_FREQ / SAMPLE_RATE; //64
-static int SPACE_INCREMENT = SINE_WAVE_RESOLUTION * SPACE_FREQ / SAMPLE_RATE; // 117.333
+static int MARK_INCREMENT = SINE_WAVE_RESOLUTION * MARK_FREQ / (SAMPLE_RATE); //64
+static int SPACE_INCREMENT = SINE_WAVE_RESOLUTION * SPACE_FREQ / (SAMPLE_RATE); // 117.333
 
 //IntervalTimer object used to run an interrupt service routine at the sampling rate to transmit and receive bits.
 IntervalTimer interruptTimer;
@@ -185,7 +202,10 @@ volatile long t1 = 0;
 //Storage for the actual bytes to be transmitted and the array containing all data.
 QueueArray<char> txBuffer;
 String dataBuffer = "";
+
+/* Transmission Functions */
 void enqueueData();
+void transmitAPRSPacket(String &data);  //Assembles data into the correct format and tells the module to start transmitting
 
 /* Functions called during interrupts */
 void radioISR();
@@ -193,6 +213,25 @@ void radioTXISR();
 void radioRXISR();
 void processSample(int8_t sample);
 
+/* Functions associated with the AX.25 / APRS protocol */
+static const int PTT_ON_DELAY = 500; //ms
+void transmissionProtocolInit();
+void txVariablesInit();
+void attachHDLCFlag();
+void attachSSIDs();
+int calculateFCS(String packet);
+void attachFCS(const int FSCBits);
+
+/* AX.25 Protocol constants */
+//These are bytes that by protocol must go in a certain place in our packet.
+static const char HDLC_FLAG = 0x7E; //01111110: six 1s in a row, which will distinguish between bitstuffed data and the wrapping HDLC char.
+static const char HDLC_RESET = B01111111; //if we receive one of these, something went wrong in the transmission.
+static const char CONTROL_FIELD_BYTE = 0x03; //00000011
+static const char PROTOCOL_ID_BYTE = 0xF0; //11110000
+static const char INFORMATION_FIELD_BYTE = 'T'; //T stands for telemetry, denoting data like GPS alt temp etc.
+static const byte PACKET_FOOTER_LENGTH = 3; //the length of the FCS bytes and the HDLC byte = 3 bytes
+
+/* Program Memory */
 //Table of 128 values representing the first 128 values of the sine wave, scaled to 8 bit resolution.
 //Used to modulate digital data into an analog waveform.
 static int sineTable[128] = 
@@ -212,7 +251,7 @@ static byte CRC_LENGTH = 16;
 
 // Lookup table containing all possible remainders for a byte being divided by the CRC polynomial.
 // Used to quickly calculate a Cyclic Redundancy Check, which determines whether there has been any
-// loss or distortion of the packet across transmission.
+// loss or distortion of the packet across transmission. (stub)
 static int crcTable[256] = {
    0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7, 0x8108, 0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF,
    0x1231, 0x0210, 0x3273, 0x2252, 0x52B5, 0x4294, 0x72F7, 0x62D6, 0x9339, 0x8318, 0xB37B, 0xA35A, 0xD3BD, 0xC39C, 0xF3FF, 0xE3DE,
@@ -232,23 +271,6 @@ static int crcTable[256] = {
    0xEF1F, 0xFF3E, 0xCF5D, 0xDF7C, 0xAF9B, 0xBFBA, 0x8FD9, 0x9FF8, 0x6E17, 0x7E36, 0x4E55, 0x5E74, 0x2E93, 0x3EB2, 0x0ED1, 0x1EF0 
 };
 
-/* Functions associated with the AX.25 / APRS protocol */
-void transmissionProtocolInit();
-void txVariablesInit();
-void attachHDLCFlag();
-void attachSSIDs();
-int calculateFCS(String packet);
-void attachFCS(const int FSCBits);
-
-/* AX.25 Protocol constants */
-//These are bytes that by protocol must go in a certain place in our packet.
-static const char HDLC_FLAG = 0x7E; //01111110: six 1s in a row, which will distinguish between bitstuffed data and the wrapping HDLC char.
-static const char HDLC_RESET = B01111111; //if we receive one of these, something went wrong in the transmission.
-static const char CONTROL_FIELD_BYTE = 0x03; //00000011
-static const char PROTOCOL_ID_BYTE = 0xF0; //11110000
-static const char INFORMATION_FIELD_BYTE = 'T'; //T stands for telemetry, denoting data like GPS alt temp etc.
-static const byte PACKET_FOOTER_LENGTH = 3; //the length of the FCS bytes and the HDLC byte = 3 bytes
-
 //-----------------------------------------------------------------------------------------------------------------------------------------------------------TODO: Header Files
 void setup()
 {
@@ -257,7 +279,8 @@ void setup()
   pinMode(PTT,OUTPUT);
   pinMode(micPin,OUTPUT);  
   pinMode(3,OUTPUT);
-  analogWriteResolution(8);
+  analogReadResolution(10);
+  analogWriteResolution(12);
   setupRadio();
   if(INTERRUPTS_ON) {
       interruptTimer.begin(radioISR,(float) 1E6/SAMPLE_RATE); //microseconds
@@ -300,31 +323,6 @@ void loop() {
     } else {
         debugReceive();
     }
-//      Serial.println("Start");
-//      debugReceive();
-//      Serial.println("End");
-//    transmitAPRSPacket("Hello World!");
-//    while(txing);//wait until transmission is complete, after which it will be turned false
-//    digitalWrite(PTT,HIGH);
-//    delay(10000);
-//  digitalWrite(3,LOW);
-//  if(debugRx) {
-//      debugReceive();
-//  }
-//  if(!debug) {
-//    if(clearToSend) {
-//        transmissionProtocolInit();
-//        
-//    }
-//    if(gotData) {
-//        if( checkIntegrity (incomingTransmission) ) {
-//            Serial.println("Clean Transmission Received!");
-//        } else {
-//            Serial.println("Corrupted Transmission Received!");
-//        }
-//        Serial.println(incomingTransmission);
-//    }
-//  }
 }
 
 void configSettings() {
@@ -413,16 +411,25 @@ void radioTXISR() {
       }    
       bitIndex--;
       analogOut = sineLookup(currentPhase);
+      if(debugTx) {
+          if(sizeSamplesOut<SAMPLES_IN_CAP) {
+              samplesOut[sizeSamplesOut] = analogOut;
+              sizeSamplesOut++;
+          } else {
+              sizeSamplesOut = 0;
+              samplesOut[sizeSamplesOut] = analogOut;
+          }
+      }
       analogWrite(micPin, analogOut);
   // t1 = micros();
       if(!debugRx) digitalWrite(LED_PIN,LOW);
 }
 
-uint8_t sineLookup(const int currentPhase) {
-    uint8_t analogOut = 0;
+uint16_t sineLookup(const int currentPhase) {
+    uint16_t analogOut = 0;
     int index = currentPhase % (SINE_WAVE_RESOLUTION/2);
-    analogOut = (index < 128) ? sineTable[index] : sineTable[SINE_WAVE_RESOLUTION/2 - index - 1];
-    analogOut = (currentPhase >= ( SINE_WAVE_RESOLUTION/2 )) ? 255 - analogOut : analogOut;
+    analogOut = (index < SINE_WAVE_RESOLUTION/4) ? sineTable[index] : sineTable[SINE_WAVE_RESOLUTION/2 - index - 1];
+    analogOut = (currentPhase >= ( SINE_WAVE_RESOLUTION/2 )) ? SINE_WAVE_RESOLUTION/2-1 - analogOut : analogOut;
     return analogOut;
 }
 void radioRXISR() {
@@ -432,10 +439,13 @@ void radioRXISR() {
 }
 
 void processSample(int8_t sample) {
-    if(debug) {
+    if(debugRx) {
         if(sizeSamplesIn < SAMPLES_IN_CAP) {
-          samplesIn[sizeSamplesIn] = sample;
-          sizeSamplesIn++;
+            samplesIn[sizeSamplesIn] = sample;
+            sizeSamplesIn++;
+        } else {
+            sizeSamplesIn = 0;
+            samplesIn[sizeSamplesIn] = sample;
         }
     }
     if(lastFiveSamples.count() < 5) {
@@ -444,12 +454,15 @@ void processSample(int8_t sample) {
         return;
     }
     delayedSamples[0] = delayedSamples[1];
-    delayedSamples[1] = ((int8_t)lastFiveSamples.dequeue() * sample ) >> 2;
+    delayedSamples[1] = ((int16_t)lastFiveSamples.dequeue() * sample ) >> 2;
     lowPassOut = (lowPassOut >> 1) + delayedSamples[0] + delayedSamples[1];
-    if(debug) {
+    if(debugRx) {
         if(sizeDemodSamples < SAMPLES_IN_CAP) {
-            demodSamples[sizeDemodSamples] = (lowPassOut > 0) ? 1 : 0 ;
+            demodSamples[sizeDemodSamples] = (lowPassOut > 0) ? 1 : 0;
             sizeDemodSamples++;
+        } else {
+            sizeDemodSamples = 0;
+            demodSamples[sizeDemodSamples] = (lowPassOut > 0) ? 1 : 0;
         }
     }
     lastFiveSamples.enqueue(sample);
@@ -481,11 +494,12 @@ void processSample(int8_t sample) {
         }
     }
 }
+
 void transmitAPRSPacket(String &data) {
     if(!txing && !rxing) {
         while(!txBuffer.isEmpty()) {
             txBuffer.dequeue();
-        }    
+        }   
         transmissionProtocolInit();
         enqueueData();
         transmissionProtocolAppend();
@@ -494,6 +508,7 @@ void transmitAPRSPacket(String &data) {
             Serial.println("PTT Turned low");
         }
         digitalWrite(PTT,LOW);
+        delay(PTT_ON_DELAY); //wait for radio to key
         txing = true; //allow the TX ISR to run and transmit the data
     } else {
         if(debug) {
@@ -512,6 +527,7 @@ void transmissionProtocolInit() {
         Serial.println("Packet header appended");
     }
 }
+
 void transmissionProtocolAppend() {
     int FSCBits = calculateFCS(dataBuffer);
     attachFCS(FSCBits);
@@ -579,6 +595,7 @@ void txVariablesInit() {
     freq = MARK_FREQ;
     increment = MARK_INCREMENT;
 }
+
 void parseNRZToDataBits(byte b) {
     if(firstBit) {
         if(b == 0) {
@@ -597,18 +614,24 @@ void parseNRZToDataBits(byte b) {
         if(!lastBitsDiffer(demodulatedBitStream,b)) {
             dataBits |= 1;
             consecutiveOnes++;
-            if(debug) {
+            if(debugRx) {
                if(sizeBitsIn < BITS_IN_CAP) {
                    bitsIn[sizeBitsIn] = 1;
                    sizeBitsIn++;
+               } else {
+                   sizeBitsIn = 0;
+                   bitsIn[sizeBitsIn] = 1;
                }
             }   
         } else {
             consecutiveOnes = 0;
-            if(debug) {
+            if(debugRx) {
                 if(sizeBitsIn < BITS_IN_CAP) {
                     bitsIn[sizeBitsIn] = 0;
                     sizeBitsIn++;
+                } else {
+                    sizeBitsIn = 0;
+                    bitsIn[sizeBitsIn] = 0;
                 }
             }
         }
@@ -658,7 +681,20 @@ void debugTransmit() {
 //      analogWriteTone(micPin,2200,2000);
 //      analogWriteTone(micPin,1200,2000);
 //      analogWrite(micPin,128);
-    while(txing); //wait until transmission is complete, after which it will be turned false
+    int sizeSamplesOutCopy = sizeSamplesOut;
+    while(txing) { //wait until transmission is complete, after which it will be turned false
+//        if(deqSamples > sizeSamplesOutCopy) {
+//            while (deqSamples < SAMPLES_IN_CAP) {
+//                Serial.println(samplesOut[deqSamples]);
+//                deqSamples++;
+//            }
+//                deqSamples=0;
+//            }        
+//        while(deqSamples < sizeSamplesOutCopy ) {
+//            Serial.println(samplesOut[deqSamples]);
+//            deqSamples++; 
+//        }
+    }
 //    int count8 = 0;
 //    Serial.println("Bits Sent:");
 //    while(!bitsOutSize==0) {
@@ -669,12 +705,13 @@ void debugTransmit() {
 //        Serial.print(bitsOut[bitsOutSize]);
 //        count8++;
 //    }
+    
     Serial.println("done");
     delay(4000);
 }
 
 void debugReceive() {    
-    Serial.println("start");  
+//    Serial.println("start");  
 //    int t0 = millis();
 //    Serial.println(t0);
 //    rxing = true;
@@ -683,47 +720,65 @@ void debugReceive() {
 //            rxing = false;
 //        }
 //    }
-//    runAtomicCode (
-        int deqBits = 0;
-        int deqSamples = 0;
-        int deqDemodSamples = 0;
-        Serial.println("Samples Received:");
-        while(deqSamples < sizeSamplesIn ) {
-            Serial.print(samplesIn[deqSamples]);
+        int sizeSamplesInCopy = sizeSamplesIn;
+        int sizeDemodSamplesCopy = sizeDemodSamples;
+        int sizeBitsInCopy = sizeBitsIn;
+//        Serial.println("Samples Received:");
+        if(deqSamples > sizeSamplesInCopy) {
+          
+            while (deqSamples < SAMPLES_IN_CAP) {
+                Serial.println(samplesIn[deqSamples]);
+                deqSamples++;
+            }
+            deqSamples=0;
+        }        
+        while(deqSamples < sizeSamplesInCopy ) {
+            Serial.println(samplesIn[deqSamples]);
             deqSamples++; 
         }
-        Serial.println();
-        int count8 = 0;
-        Serial.println("Demodulated Samples:");
-        while(deqDemodSamples < sizeDemodSamples) {
-            Serial.print(demodSamples[deqDemodSamples]);
-            deqDemodSamples++;
+//        Serial.println();
+//        Serial.println("Demodulated Samples:");
+        if(deqSamples > sizeDemodSamplesCopy) {
+            while(deqDemodSamples < SAMPLES_IN_CAP) {
+//                Serial.print(demodSamples[deqDemodSamples]);
+                deqDemodSamples++;
+            }
+            deqDemodSamples = 0;
         }
-        Serial.println();
-        Serial.println("Bits Received:");
-        while(deqBits < sizeBitsIn) {
+        while(deqDemodSamples < sizeDemodSamplesCopy) {
+//            Serial.print(demodSamples[deqDemodSamples]);
+              deqDemodSamples++;
+        }
+
+//        Serial.println();
+//        Serial.println("Bits Received:");
+        if(deqBits > sizeBitsInCopy) {
+            while(deqBits < BITS_IN_CAP) {
+                if(count8 == 8) {
+                    count8 = 0;
+//                    Serial.print("|");
+                }
+//                Serial.print(bitsIn[deqBits],BIN);
+                count8++;
+                deqBits++;
+            }
+            deqBits = 0;
+        }
+        while(deqBits < sizeBitsInCopy) {
             if(count8 == 8) {
                 count8 = 0;
-                Serial.print("|");
+//                Serial.print("|");
             }
-            Serial.print(bitsIn[deqBits],BIN);
+//            Serial.print(bitsIn[deqBits],BIN);
             count8++;
             deqBits++;
         }
-        Serial.println();
-        Serial.println(incomingTransmission);
-        Serial.println(sizeSamplesIn);
-        Serial.println(sizeDemodSamples);
-        Serial.println(sizeBitsIn);
+//        Serial.println();
+//        Serial.println(incomingTransmission);
+//        Serial.println(sizeSamplesIn);
+//        Serial.println(sizeDemodSamples);
+//        Serial.println(sizeBitsIn);
         incomingTransmission = "";
-        deqBits = 0;
-        deqSamples = 0;
-        deqDemodSamples = 0;
-        count8 = 0;
-        sizeSamplesIn = 0;
-        sizeDemodSamples = 0;
-        sizeBitsIn = 0;
-//    )
-    delay(1000);
-    Serial.println("done");
+    delay(100);
+//    Serial.println("done");
 }
