@@ -60,6 +60,7 @@
 //flag for enabling data structures for debugging transmission and reception. Setting true will declare multiple large data structures.
 #define DEBUG_ARRAYS true
 
+#define SINE_12_BIT false //enable 12 bit sine table
 //Instance variables used for debugging//
 // integers for counting the data sent and received
 int deqBits = 0;
@@ -103,7 +104,7 @@ static const int audioPin = A8;         //the pin outputting received audio/sign
 static const int micPin = A14;          //the pin doing the modulation
 
 //APRS parameters
-String messageTx = "SSI-43 Test: Hello World!";
+String messageTx = "SSI-43 Test: He                      asdfasdfasdfasdfasdfsdafasfasdfasdfsadfsadf                                                   llo World!";
 static const String DESTINATION_ADDRESS = "AG6WH";
 static const String SOURCE_ADDRESS = "KM4SEE";
 static const String DIGIPEATER_PATH = "WIDE2-1";
@@ -124,10 +125,12 @@ void configSettings();                  //Sets radio parameters
 void analogWriteTone(const byte mic, long frequency, long durationMillis);
 uint16_t sineLookup(const int currentPhase);
 
-static const uint16_t BIT_RATE = 12500;
+static const uint16_t BIT_RATE = 1200;
 static const uint16_t SAMPLE_RATE = BIT_RATE*8;
 static const int SAMPLES_PER_BIT = 8; //SAMPLE_RATE/BIT_RATE
-static const int SINE_WAVE_RESOLUTION = 512;
+static const int SINE_TABLE_LENGTH = 512;
+static const int SINE_WAVE_RESOLUTION = 8;
+static const int SINE_WAVE_MAX = pow(2,SINE_WAVE_RESOLUTION + 1);
 
 /* Analog-to-Digital Conversion constants and functions */
 void parseNRZToDataBits(byte b);
@@ -148,9 +151,9 @@ byte consecutiveOnes = 0;
 String incomingTransmission;
 
 //demodulation constants and instance variable dealing with phase synchronization.
-static const int RECORD_BIT_THRESHOLD = SINE_WAVE_RESOLUTION/8;
-static const int SYNC_ADJUST_THRESHOLD = SINE_WAVE_RESOLUTION/16;
-static const int SYNC_SAMPLE_INCREMENT = SINE_WAVE_RESOLUTION/64;
+static const int RECORD_BIT_THRESHOLD = SINE_TABLE_LENGTH/8;
+static const int SYNC_ADJUST_THRESHOLD = SINE_TABLE_LENGTH/16;
+static const int SYNC_SAMPLE_INCREMENT = SINE_TABLE_LENGTH/64;
 static const int SYNC_ADJUST = SYNC_SAMPLE_INCREMENT/8;
 int syncCounter = 0;
 
@@ -159,8 +162,8 @@ static int MARK_FREQ = 1200; //Hz
 static int SPACE_FREQ = 2200; //Hz
 
 //The distance in the sine table array between samples of the sine wave; how far we step forward in the sine wave for each sample sent
-static int MARK_INCREMENT = SINE_WAVE_RESOLUTION * MARK_FREQ / (SAMPLE_RATE); //64
-static int SPACE_INCREMENT = SINE_WAVE_RESOLUTION * SPACE_FREQ / (SAMPLE_RATE); // 117.333
+static int MARK_INCREMENT = SINE_TABLE_LENGTH * MARK_FREQ / (SAMPLE_RATE); //64
+static int SPACE_INCREMENT = SINE_TABLE_LENGTH * SPACE_FREQ / (SAMPLE_RATE); // 117.333
 
 //IntervalTimer object used to run an interrupt service routine at the sampling rate to transmit and receive bits.
 IntervalTimer interruptTimer;
@@ -172,7 +175,7 @@ volatile bool txing = false;
 /* Instance variables for use in interrupt functions */
 
 //The analog voltage to be written out to the RF module.
-volatile uint8_t analogOut = 0; //assumes 8 bit resolution
+volatile uint16_t analogOut = 0; //assumes 8 bit resolution
 
 //The phase angle used to calculate what voltage to write at each sampling interval.
 volatile int currentPhase = 0;
@@ -234,6 +237,19 @@ static const byte PACKET_FOOTER_LENGTH = 3; //the length of the FCS bytes and th
 /* Program Memory */
 //Table of 128 values representing the first 128 values of the sine wave, scaled to 8 bit resolution.
 //Used to modulate digital data into an analog waveform.
+
+#if SINE_12_BIT == true
+static uint16_t sineTable[128] = {
+2047, 2072, 2097, 2122, 2147, 2173, 2198, 2223, 2248, 2273, 2298, 2323, 2348, 2372, 2397, 2422,
+2447, 2471, 2496, 2520, 2545, 2569, 2593, 2617, 2642, 2666, 2689, 2713, 2737, 2761, 2784, 2807, 
+2831, 2854, 2877, 2900, 2923, 2945, 2968, 2990, 3012, 3035, 3056, 3078, 3100, 3121, 3143, 3164,
+3185, 3206, 3226, 3247, 3267, 3287, 3307, 3327, 3346, 3366, 3385, 3404, 3422, 3441, 3459, 3477,
+3495, 3513, 3530, 3547, 3564, 3581, 3598, 3614, 3630, 3646, 3662, 3677, 3692, 3707, 3721, 3736,
+3750, 3764, 3777, 3791, 3804, 3816, 3829, 3841, 3853, 3865, 3876, 3887, 3898, 3909, 3919, 3929,
+3939, 3949, 3958, 3967, 3975, 3984, 3992, 3999, 4007, 4014, 4021, 4027, 4034, 4040, 4045, 4051,
+4056, 4060, 4065, 4069, 4073, 4076, 4080, 4083, 4085, 4087, 4089, 4091, 4093, 4094, 4094, 4095,
+};
+#else
 static int sineTable[128] = 
 {
     128, 129, 131, 132, 134, 135, 137, 138, 140, 142, 143, 145, 146, 148, 149, 151,
@@ -245,7 +261,7 @@ static int sineTable[128] =
     245, 246, 246, 247, 248, 248, 249, 249, 250, 250, 250, 251, 251, 252, 252, 252,
     253, 253, 253, 253, 254, 254, 254, 254, 254, 255, 255, 255, 255, 255, 255, 255,
 };
-
+#endif
 // The length of the CRC checksum in bits.
 static byte CRC_LENGTH = 16;
 
@@ -280,7 +296,7 @@ void setup()
   pinMode(micPin,OUTPUT);  
   pinMode(3,OUTPUT);
   analogReadResolution(10);
-  analogWriteResolution(12);
+  analogWriteResolution(SINE_WAVE_RESOLUTION);
   setupRadio();
   if(INTERRUPTS_ON) {
       interruptTimer.begin(radioISR,(float) 1E6/SAMPLE_RATE); //microseconds
@@ -348,7 +364,7 @@ void analogWriteTone(byte mic, long freq, long durationMillis) {
 //  elapsedMicros usec = 0;
   long num_samples = (durationMillis)*SAMPLE_RATE/1000;
   long dt = durationMillis*1000/(num_samples);
-  float phase_delta =  ((freq == MARK_FREQ) ? MARK_INCREMENT: SPACE_INCREMENT) * (twopi/SINE_WAVE_RESOLUTION);
+  float phase_delta =  ((freq == MARK_FREQ) ? MARK_INCREMENT: SPACE_INCREMENT) * (twopi/SINE_TABLE_LENGTH);
   Serial.println(phase_delta);
   while(long i = 0 < num_samples) {
       analogVal = sin(phase) * 127 + 128;
@@ -406,8 +422,8 @@ void radioTXISR() {
       }
       increment = (freq == MARK_FREQ) ? MARK_INCREMENT : SPACE_INCREMENT;    
       currentPhase+=increment;
-      if(currentPhase > SINE_WAVE_RESOLUTION) {
-          currentPhase-=SINE_WAVE_RESOLUTION;
+      if(currentPhase > SINE_TABLE_LENGTH) {
+          currentPhase-=SINE_TABLE_LENGTH;
       }    
       bitIndex--;
       analogOut = sineLookup(currentPhase);
@@ -427,9 +443,9 @@ void radioTXISR() {
 
 uint16_t sineLookup(const int currentPhase) {
     uint16_t analogOut = 0;
-    int index = currentPhase % (SINE_WAVE_RESOLUTION/2);
-    analogOut = (index < SINE_WAVE_RESOLUTION/4) ? sineTable[index] : sineTable[SINE_WAVE_RESOLUTION/2 - index - 1];
-    analogOut = (currentPhase >= ( SINE_WAVE_RESOLUTION/2 )) ? SINE_WAVE_RESOLUTION/2-1 - analogOut : analogOut;
+    int index = currentPhase % (SINE_TABLE_LENGTH/2);
+    analogOut = (index < SINE_TABLE_LENGTH/4) ? sineTable[index] : sineTable[SINE_TABLE_LENGTH/2 - index - 1];
+    analogOut = (currentPhase >= ( SINE_TABLE_LENGTH/2 )) ? ((SINE_WAVE_MAX/2)- 1) - analogOut : analogOut;
     return analogOut;
 }
 void radioRXISR() {
