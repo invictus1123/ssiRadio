@@ -14,10 +14,12 @@ const bool DEBUG = true;
 #define MIC_PIN A14
 #define PWM_PIN A0
 #define AUDIO_PIN A8
-#define DRATX 7
-#define DRARX 8
+#define DRATX A9
+#define DRARX A8
 #define TX_CTCSS "0000"
 #define RX_CTCSS "0000"
+static const float APRS_NA_FTX = 144.390; //transmission frequency in MHz (APRS 144.390 standard)
+static const float APRS_NA_FRX = 144.390; //receiving frequency in MHz
 #define PTT_DELAY 700 //ms
 #define N_HDLC_FLAGS 2
 

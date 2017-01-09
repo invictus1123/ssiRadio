@@ -10,11 +10,18 @@ volatile int freq = MARK_FREQ;
 volatile uint16_t analogOut = 0;
 volatile uint32_t currentPhase = 0; //32bit integer for higher res integer math
 volatile uint32_t increment = MARK_INCREMENT;
+
+//the index used to count how many samples we've sent for the current bit
 volatile byte bitIndex = 0;
+//the index denoting which bit within the current byte we are transmitting
 volatile byte byteIndex = 0;
+//the index denoting which bit we are transmitting
 volatile int packetIndex = 0;
-volatile char currentByte = 0; //stores the current byte being transmitted
+//the current byte being transmitted
+volatile char currentByte = 0; 
+//data structure for the packet
 volatile uint8_t* packet;
+//the total number of bits in the packet
 volatile int packet_size = 0;
 
 // 1200 Baud settings
@@ -28,9 +35,10 @@ uint16_t sineLookup(const int currentPhase) {
     return analogOut;
 }
 
-void afsk_modulate_packet(volatile uint8_t *buffer, int size) {
+void afsk_modulate_packet(volatile uint8_t *buffer, int size, int trailingBits) {
     packet = buffer;
     packet_size = size;
+    Serial.println(size);
     analogWriteResolution(SINE_WAVE_RESOLUTION);
     afsk_timer_begin();
 }
@@ -38,9 +46,9 @@ void afsk_modulate_packet(volatile uint8_t *buffer, int size) {
 void afsk_timer_begin() {
     if(DEBUG) {
         interruptTimer.begin(radioISR,(float)1E6/(SAMPLE_RATE/DEBUG_PRESCALER)); //microseconds
-        Serial.println(SAMPLES_PER_BIT);
-        Serial.println(MARK_INCREMENT);
-        Serial.println(SPACE_INCREMENT);
+//        Serial.println(SAMPLES_PER_BIT);
+//        Serial.println(MARK_INCREMENT);
+//        Serial.println(SPACE_INCREMENT);
     } else {
         interruptTimer.begin(radioISR,(float)1E6/(SAMPLE_RATE));
     }
@@ -69,33 +77,35 @@ void radioISR() {
     if(!txing) return;
     if(DEBUG) digitalWrite(LED_PIN,HIGH);
     if(bitIndex == 0) {
-        if(byteIndex== 0) {
-            if(packetIndex < packet_size) {
-                currentByte = packet[packetIndex]; //grab the next byte to transmit
-                packetIndex++;
-//                Serial.println(packetIndex);
-            } else {
-                txing = false;
-                analogWrite(MIC_PIN,SINE_WAVE_MAX/2);
-                digitalWrite(PTT_PIN,HIGH);
-                if(DEBUG) {
-                    digitalWrite(LED_PIN,LOW);
-                }
-                afsk_timer_stop();
-                return;
+        if(packetIndex >= packet_size) {
+            txing = false;
+            analogWrite(MIC_PIN,SINE_WAVE_MAX/2);
+            digitalWrite(PTT_PIN,HIGH);
+            if(DEBUG) {
+                digitalWrite(LED_PIN,LOW);
             }
+            afsk_timer_stop();
+            return;
+        } else if (byteIndex== 0) {
+            currentByte = packet[packetIndex/8]; //grab the next byte to transmit
             byteIndex = B10000000; //reset the byte bitmask to the first bit
-            //if we are supposed to send a 1 at this bit, maintain current TX frequency (NRZ encoding), unless we have sent 5 1s in a row and must stuff a 0
-        } else {
-            byteIndex>>=1; //shift to the next bit to be transmitted
-        }//endif byteIndex ==0
+        }
+        //if we are supposed to send a 1 at this bit, maintain current TX frequency (NRZ encoding), unless we have sent 5 1s in a row and must stuff a 0
         if(currentByte & byteIndex) { //transmitting a 1
+          if(DEBUG) {
+//              Serial.println("-1-");
+          }
             //freq remains unchanged
         } else { //transmitting a 0
+            if(DEBUG)  {
+//                Serial.println("-0-");
+            }
             freq = (freq == MARK_FREQ) ? SPACE_FREQ : MARK_FREQ; //if we are supposed to send a 0 at this bit, change the current TX frequency
         }
         increment = (freq == MARK_FREQ) ? MARK_INCREMENT : SPACE_INCREMENT; //adjust the phase delta we add each sample depending on whether we are transmitting 0 or 1
         bitIndex = SAMPLES_PER_BIT; //reset the bitIndex;
+        packetIndex++;
+        byteIndex>>=1; //shift to the next bit to be transmitted
     } //endif: bitIndex == 0
     currentPhase+=increment;
     if(currentPhase > SINE_TABLE_LENGTH*ANGLE_RESOLUTION_PRESCALER) {

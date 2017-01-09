@@ -1,6 +1,5 @@
 #ifndef APRS_H
 #define APRS_H
-
 #include "aprs_global.h"
 #include "dra818v.h"
 #include "Arduino.h"
@@ -17,16 +16,37 @@ class APRS
 public:
     APRS(DRA818V* DRA, SSID* addr, uint8_t nSSIDs);
     void setSSIDs(SSID* addr, uint8_t numSSIDs);
-    void sendPacket(uint8_t *data_buffer, String comment, int len);
+    
+    void sendPacketGPS(const uint8_t dayOfMonth, const uint8_t hour, const uint8_t min,
+    const float lat,
+    const float lon, // degrees
+    const float altitude, // meters
+    const uint16_t heading, // degrees
+    const float speed,
+    String comment);
+    
+    void sendPacketGPS(const uint8_t dayOfMonth, const uint8_t hour, const uint8_t min,
+    const float lat,
+    const float lon, // degrees
+    const float altitude, // meters
+    const uint16_t heading, // degrees
+    const float speed,
+    const char * const comment);
+    
+    void sendPacketNoGPS(String data);
+    void sendPacketNoGPS(char* data);
+    
     int getPacketSize();
     void clearPacket();
 private:
     void loadHeader();
     void loadData(uint8_t *data_buffer, uint8_t length);
     void loadFooter();
+    void loadTrailingBits(uint8_t bitIndex);
     void loadByte(uint8_t byte);
     void loadBit(uint8_t bit, bool bitStuff);
-    void loadString(char* str, uint8_t length);
+    void loadString(String str);
+    void loadString(char* str);
     void loadHDLCFlag();
     void update_crc(uint8_t bit);
     DRA818V* radio;

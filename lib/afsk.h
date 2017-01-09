@@ -12,7 +12,7 @@ static const float PREEMPHASIS_RATIO = 0.75;
 
 //Time Constants
 static const int BIT_RATE = 1200; //APRS standard.
-static const uint32_t SAMPLE_RATE = 96000;
+static const uint32_t SAMPLE_RATE = 9600;
 static const uint32_t SAMPLES_PER_BIT = SAMPLE_RATE / BIT_RATE;
 static const int DEBUG_PRESCALER = 1;//Set to 1 for full speed, higher to slow down interrupts by that factor
 
@@ -25,7 +25,7 @@ static const uint32_t MARK_INCREMENT = ANGLE_RESOLUTION_PRESCALER * SINE_TABLE_L
 static const uint32_t SPACE_INCREMENT = ANGLE_RESOLUTION_PRESCALER * SINE_TABLE_LENGTH * SPACE_FREQ / SAMPLE_RATE;
 // Exported functions
 
-void afsk_modulate_packet(volatile uint8_t* buffer, int size);
+void afsk_modulate_packet(volatile uint8_t* buffer, int size, int trailingBits);
 void afsk_timer_begin();
 void afsk_timer_stop();
 void resetVolatiles();
